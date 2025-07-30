@@ -1,12 +1,22 @@
 import { useState, useEffect, useRef } from "react";
+import { Trophy, Star, Calendar, Clock, BookOpen } from "lucide-react";
+import apiClient from "@/config/ApiConfig";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import {
-  Trophy,
-  Star,
-  Calendar,
-  Clock,
-  BookOpen,
-} from "lucide-react";
-import apiClient from "@/config/ApiConfig"; 
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { PDFDocument, rgb } from "pdf-lib";
+import { DownloadIcon, ShareIcon, CertificateIcon } from "@/components/Icons";
+import { Worker, Viewer } from "@react-pdf-viewer/core";
+import "@react-pdf-viewer/core/lib/styles/index.css";
+import fontkit from "@pdf-lib/fontkit";
+import certTemplateUrl from "/src/assets/Certificate_Template.pdf?url";
+import markerFontUrl from "/src/assets/fonts/lumiosbrush-regular.otf?url";
 
 // Describes a single achievement from your API
 interface Achievement {
@@ -39,7 +49,6 @@ interface UserStats {
   updatedAt: string;
 }
 
-
 // --- Component Props ---
 
 interface AchievementCardProps {
@@ -57,6 +66,18 @@ const Rewards = (): JSX.Element => {
   const [_totalPoints, _setTotalPoints] = useState<number>(0);
   const [userStats, setUserStats] = useState<UserStats | null>(null);
   const [claimingReward, setClaimingReward] = useState<string | null>(null);
+  const [tab, setTab] = useState<"rewards" | "certifications">("rewards");
+
+  const [certificates, setCertificates] = useState(
+    Array(12).fill({
+      issueDate: "Jun 25, 2025",
+      title: "Deep Learning Certificate",
+      studentName: "Muhammad Hamza",
+      description:
+        "In recognition of their successful completion of five engaging topics in Reading Mode with enthusiasm and consistent effort in reading and understanding.",
+      pdfUrl: null,
+    })
+  );
 
   // Static data defining the level structure
   // const levelData: Level[] = [
@@ -145,7 +166,6 @@ const Rewards = (): JSX.Element => {
       } else {
         setError("Failed to load achievements");
       }
-      
     } catch (err: any) {
       setError(
         err.response?.data?.message ||
@@ -186,6 +206,116 @@ const Rewards = (): JSX.Element => {
       setClaimingReward(null);
     }
   };
+
+  const modifyPDF = async (cert: (typeof certificates)[0]) => {
+    try {
+      const pdfRes = await fetch(certTemplateUrl);
+      if (!pdfRes.ok) return null;
+      const pdfBytes = await pdfRes.arrayBuffer();
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+
+      pdfDoc.registerFontkit(fontkit);
+
+      const [firstPage] = pdfDoc.getPages();
+      const { width } = firstPage.getSize();
+
+      const fontRes = await fetch(markerFontUrl);
+      if (!fontRes.ok) return null;
+      const fontBytes = await fontRes.arrayBuffer();
+      const customFont = await pdfDoc.embedFont(fontBytes);
+      const helvetica = await pdfDoc.embedFont("Helvetica");
+      const helveticabold = await pdfDoc.embedFont("Helvetica-Bold");
+
+      // Name
+      const nameFontSize = 80;
+      const nameTextWidth = customFont.widthOfTextAtSize(
+        cert.studentName,
+        nameFontSize
+      );
+      const nameX = (width - nameTextWidth) / 2;
+
+      firstPage.drawText(cert.studentName, {
+        x: nameX,
+        y: 250,
+        size: nameFontSize,
+        font: customFont,
+        color: rgb(1, 0.69, 0.17),
+      });
+
+      // Description
+      const descFontSize = 16;
+      const maxWidth = width * 0.6;
+      const words = cert.description.split(" ");
+      const lines: string[] = [];
+      let line = "";
+
+      for (const word of words) {
+        const testLine = line ? `${line} ${word}` : word;
+        const testWidth = helvetica.widthOfTextAtSize(testLine, descFontSize);
+        if (testWidth < maxWidth) {
+          line = testLine;
+        } else {
+          lines.push(line);
+          line = word;
+        }
+      }
+      if (line) lines.push(line);
+
+      let y = 200;
+      const lineHeight = descFontSize + 6;
+
+      for (const descLine of lines) {
+        const lineWidth = helvetica.widthOfTextAtSize(descLine, descFontSize);
+        const x = (width - lineWidth) / 2;
+        firstPage.drawText(descLine, {
+          x,
+          y,
+          size: descFontSize,
+          font: helvetica,
+          color: rgb(0, 0, 0),
+        });
+        y -= lineHeight;
+      }
+
+      // Issue Date
+      const issueFontSize = 16;
+      const issueText = `Issued on ${cert.issueDate}`;
+      const issueWidth = helvetica.widthOfTextAtSize(issueText, issueFontSize);
+      const issueX = (width - issueWidth) / 2;
+
+      firstPage.drawText(issueText, {
+        x: issueX,
+        y: y - 20,
+        size: issueFontSize,
+        font: helveticabold,
+      });
+
+      // Finalize PDF
+      const modifiedPdfBytes = await pdfDoc.save();
+      const blob = new Blob([modifiedPdfBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+
+      return url;
+    } catch (error) {
+      console.log("Error modifying PDF:", error);
+      return null;
+    }
+  };
+
+  // Generate PDFs when certificates change
+  useEffect(() => {
+    const generatePDFs = async () => {
+      const updatedCerts = await Promise.all(
+        certificates.map(async (cert) => {
+          const pdfUrl = await modifyPDF(cert);
+          return { ...cert, pdfUrl };
+        })
+      );
+      setCertificates(updatedCerts);
+    };
+
+    generatePDFs();
+  }, []);
 
   // const getCurrentLevel = (): Level => {
   //   return (
@@ -394,10 +524,6 @@ const Rewards = (): JSX.Element => {
     );
   }
 
-  // const currentLevel = getCurrentLevel();
-  // const nextLevel = getNextLevel();
-  // const progress = getProgressToNextLevel();
-
   const categoryIcons: { [key: string]: JSX.Element } = {
     Topics: <BookOpen className="w-5 h-5" />,
     Usage: <Clock className="w-5 h-5" />,
@@ -407,90 +533,129 @@ const Rewards = (): JSX.Element => {
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="max-w-7xl mx-auto">
-        {/* <header className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">Rewards & Achievements</h1>
-          <p className="text-gray-600">Track your progress, earn points, and claim rewards.</p>
-        </header>
+      <div className="mx-auto">
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setTab(v as "rewards" | "certifications")}
+          className="w-full"
+        >
+          <TabsList className="w-full mb-8 px-2 py-4">
+            <TabsTrigger className="w-full" value="rewards">
+              Rewards
+            </TabsTrigger>
+            <TabsTrigger className="w-full" value="certifications">
+              Certifications
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="rewards">
+            <main className="space-y-8">
+              {achievements.map((category) => (
+                <section key={category.category}>
+                  <h2 className="text-xl font-semibold text-gray-800 mb-6 flex items-center gap-3">
+                    {categoryIcons[category.category] || categoryIcons.Default}
+                    {category.category} Achievements
+                    <span className="text-sm font-normal text-gray-500">
+                      ({category.earned.length} earned,{" "}
+                      {category.available.length} available)
+                    </span>
+                  </h2>
+                  {(category.earned.length > 0 ||
+                    category.available.length > 0) && (
+                    <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+                      {category.earned.map((achievement) => (
+                        <AchievementCard
+                          key={achievement.id}
+                          achievement={achievement}
+                          isEarned={true}
+                          userStats={userStats}
+                        />
+                      ))}
+                      {category.available.map((achievement) => (
+                        <AchievementCard
+                          key={achievement.id}
+                          achievement={achievement}
+                          isEarned={false}
+                          userStats={userStats}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              ))}
+            </main>
+          </TabsContent>
+          <TabsContent value="certifications">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-6">
+              {certificates.map((cert, index) => (
+                <Dialog key={index}>
+                  <DialogTrigger asChild>
+                    <div className="bg-white border transition-all hover:border-blue-500 rounded-lg p-6 flex items-center cursor-pointer">
+                      <div className="me-3">
+                        <CertificateIcon className="w-30 h-30 text-blue-500" />
+                      </div>
+                      <div className="mb-4 flex flex-col">
+                        <div className="text-blue-500 mb-4">
+                          <i className="fas fa-certificate"></i>
+                        </div>
+                        <p className="text-gray-500 text-sm">
+                          Issue {cert.issueDate}
+                        </p>
+                        <h2 className="text-gray-800 text-sm font-medium mt-2">
+                          {cert.title}
+                        </h2>
+                      </div>
+                    </div>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-full sm:max-w-lg md:max-w-2xl lg:max-w-4xl w-full p-4 sm:p-6 md:p-8 bg-white rounded-lg shadow-lg overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle className="text-lg sm:text-xl md:text-2xl font-semibold">
+                        {cert.title}
+                      </DialogTitle>
+                    </DialogHeader>
+                    <div className="w-full h-full bg-white rounded-lg overflow-hidden">
+                      {cert.pdfUrl ? (
+                        <Worker
+                          workerUrl={`https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js`}
+                        >
+                          <Viewer fileUrl={cert.pdfUrl} />
+                        </Worker>
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col sm:flex-row justify-end gap-4 mt-4">
+                      <Button
+                        onClick={() => {
+                          if (cert.pdfUrl) {
+                            const link = document.createElement("a");
+                            link.href = cert.pdfUrl;
+                            link.download = `${
+                              cert.studentName
+                            }_${cert.title.replace(/\s+/g, "_")}.pdf`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                          }
+                        }}
+                        className="bg-white text-[#065FF0] border border-[#065FF033] hover:bg-[#f0f6ff] hover:border-[#065FF0] transition-colors duration-200 shadow-sm p-4 sm:p-5"
+                      >
+                        <DownloadIcon className="w-4 h-4 mr-2" />
+                        Download
+                      </Button>
 
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-6" role="alert">
-            <strong className="font-bold">Error: </strong>
-            <span className="block sm:inline">{error}</span>
-          </div>
-        )}
-
-        <section className="bg-white rounded-2xl p-6 mb-8 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-lg font-semibold text-gray-800">Your Progress</h3>
-              <p className="text-gray-600">Current Level: {currentLevel.name}</p>
+                      <Button className="bg-[#065FF01A] text-[#065FF0] border border-[#065FF033] hover:bg-[#e6f0ff] hover:border-[#065FF0] transition-colors duration-200 shadow-sm p-4 sm:p-5">
+                        <ShareIcon className="w-4 h-4 mr-2" />
+                        Share
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              ))}
             </div>
-            <div className="text-right">
-              <div className="text-2xl font-bold text-blue-600">{totalPoints}</div>
-              <div className="text-sm text-gray-500">Total Points</div>
-            </div>
-          </div>
-          {nextLevel && (
-            <div>
-              <div className="flex justify-between text-sm text-gray-600 mb-2">
-                <span>{currentLevel.name}</span>
-                <span>{nextLevel.name}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-3">
-                <div className="bg-blue-600 h-3 rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
-              </div>
-              <div className="text-center text-sm text-gray-500 mt-2">
-                {nextLevel.minPoints - totalPoints} points to next level
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-xl font-semibold text-gray-800 mb-6">Levels</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            {levelData.map((level) => (
-              <LevelCard key={level.name} level={level} isActive={level.name === currentLevel.name} isUnlocked={totalPoints >= level.minPoints} />
-            ))}
-          </div>
-        </section> */}
-
-        <main className="space-y-8">
-          {achievements.map((category) => (
-            <section key={category.category}>
-              <h2 className="text-xl font-semibold text-gray-800 mb-6 flex items-center gap-3">
-                {categoryIcons[category.category] || categoryIcons.Default}
-                {category.category} Achievements
-                <span className="text-sm font-normal text-gray-500">
-                  ({category.earned.length} earned, {category.available.length}{" "}
-                  available)
-                </span>
-              </h2>
-              {(category.earned.length > 0 ||
-                category.available.length > 0) && (
-                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
-                  {category.earned.map((achievement) => (
-                    <AchievementCard
-                      key={achievement.id}
-                      achievement={achievement}
-                      isEarned={true}
-                      userStats={userStats}
-                    />
-                  ))}
-                  {category.available.map((achievement) => (
-                    <AchievementCard
-                      key={achievement.id}
-                      achievement={achievement}
-                      isEarned={false}
-                      userStats={userStats}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          ))}
-        </main>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
